@@ -209,7 +209,7 @@ const styles = StyleSheet.create({
   canvas: {
     flex: 1,
     width: "100%",
-    height: "100%",
+    height: "50%",
     zIndex: 2,
   },
   content: {
