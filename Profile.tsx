@@ -6,7 +6,7 @@ import {
   Group,
   ImageShader,
   Paint,
-  Rect,
+  RoundedRect,
   useImage,
 } from "@shopify/react-native-skia";
 import { useMemo } from "react";
@@ -26,13 +26,18 @@ const { width } = Dimensions.get("window");
 const AVATAR_MARGIN = 16;
 const ISLAND_HEIGHT = 35;
 const ISLAND_TOP = 30 - ISLAND_HEIGHT / 2;
-const ISLAND_WIDTH = 100;
+const ISLAND_WIDTH = 120;
 const SCALE_DISTANCE = 30;
 const SCALE_MIN = 0.3;
+const BOUNCE_SAFE_AREA = 500;
 
 const clamp = (value: number, min: number, max: number) => {
   "worklet";
-  return Math.max(min, Math.min(max, value));
+  if (value > max) return max;
+
+  if (value < min) return min;
+
+  return value;
 };
 
 const lerp = (value: number, min: number, max: number) => {
@@ -45,104 +50,114 @@ const Profile = () => {
   const avatarTop = insets.top + AVATAR_MARGIN;
   const offsetY = useSharedValue(0);
 
-  const scrollHandler = useAnimatedScrollHandler({
-    onScroll: (event) => {
-      offsetY.value = event.contentOffset.y;
-    },
+  const scrollHandler = useAnimatedScrollHandler((event) => {
+    offsetY.value = event.contentOffset.y;
   });
 
   const image = useImage(require("./assets/avatar.jpg"));
 
-  const progress = useDerivedValue(() =>
-    clamp(offsetY.value / SCALE_DISTANCE, 0, 1)
+  const transformProgress = useDerivedValue(
+    () => clamp(offsetY.value / SCALE_DISTANCE, 0, 1),
+    []
   );
+  const blur = useDerivedValue(() => lerp(transformProgress.value, 0, 12), []);
+  const scale = useDerivedValue(
+    () => lerp(transformProgress.value, 1, SCALE_MIN),
+    []
+  );
+  const opacity = useDerivedValue(
+    () => lerp(transformProgress.value, 1, 0),
+    []
+  );
+  const imageSize = useDerivedValue(() => scale.value * IMAGE_SIZE, []);
+  const halfImageSize = useDerivedValue(() => imageSize.value / 2, []);
+  const imageX = useDerivedValue(() => width / 2 - halfImageSize.value, []);
+  const imageY = useDerivedValue(() => avatarTop - offsetY.value, []);
+  const cx = width / 2;
+  const cy = useDerivedValue(() => imageY.value + halfImageSize.value, []);
 
-  const scale = useDerivedValue(() => lerp(progress.value, 1, SCALE_MIN));
-
-  const r = useDerivedValue(() => (IMAGE_SIZE / 2) * scale.value);
-
-  const cy = useDerivedValue(() => avatarTop + r.value - offsetY.value);
-  const imageSize = useDerivedValue(() => scale.value * IMAGE_SIZE);
-  const imageX = useDerivedValue(() => width / 2 - imageSize.value / 2);
-  const imageY = useDerivedValue(() => cy.value - imageSize.value / 2);
-  const opacity = useDerivedValue(() => 1 - progress.value);
-
-  // avoid applying effect before scroll
-  const blur = useDerivedValue(() => (progress.value === 0 ? 0 : 12));
-  const matrix = useDerivedValue(() => [
-    1,
-    0,
-    0,
-    0,
-    0, // red
-    0,
-    1,
-    0,
-    0,
-    0, // green
-    0,
-    0,
-    1,
-    0,
-    0, // blue
-    0,
-    0,
-    0,
-    progress.value === 0 ? 1 : 12,
-    progress.value === 0 ? 0 : -5.5, // alpha
-  ]);
-
-  const avatarPlaceHolder = useAnimatedStyle(() => ({
-    height: imageSize.value,
-    width: imageSize.value,
+  const contentAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: -(IMAGE_SIZE - imageSize.value) }],
   }));
 
   const layer = useMemo(
     () => (
       <Paint>
         <Blur blur={blur} />
-        <ColorMatrix matrix={matrix} />
+        <ColorMatrix
+          matrix={[
+            1,
+            0,
+            0,
+            0,
+            0, // red
+            0,
+            1,
+            0,
+            0,
+            0, // green
+            0,
+            0,
+            1,
+            0,
+            0, // blue
+            0,
+            0,
+            0,
+            20,
+            -7, // alpha
+          ]}
+        />
       </Paint>
     ),
     []
   );
 
+  const canvasContainerStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: offsetY.value }],
+  }));
+
   return (
     <View style={styles.container}>
-      <View style={styles.avatarContainer}>
-        <Canvas style={styles.canvas}>
-          <Group layer={layer}>
-            <Rect
-              x={width / 2 - ISLAND_WIDTH / 2}
-              y={ISLAND_TOP}
-              width={ISLAND_WIDTH}
-              height={ISLAND_HEIGHT}
-              color="black"
-            />
-            <Circle cx={width / 2} cy={cy} r={r} color="black" />
-          </Group>
-          <Circle opacity={opacity} cx={width / 2} cy={cy} r={r}>
-            <ImageShader
-              image={image}
-              fit="fill"
-              x={imageX}
-              y={imageY}
-              width={imageSize}
-              height={imageSize}
-            />
-          </Circle>
-        </Canvas>
-      </View>
       <Animated.ScrollView
         scrollEventThrottle={16}
         onScroll={scrollHandler}
         contentContainerStyle={{
-          paddingTop: avatarTop,
           paddingBottom: insets.bottom,
         }}
       >
-        <Animated.View style={avatarPlaceHolder} />
-        <View style={styles.content}>
+        <Animated.View style={[styles.canvas, canvasContainerStyle]}>
+          <Canvas
+            style={[
+              {
+                height: avatarTop + IMAGE_SIZE + BOUNCE_SAFE_AREA,
+              },
+            ]}
+          >
+            <Group layer={layer}>
+              <RoundedRect
+                r={30}
+                x={width / 2 - ISLAND_WIDTH / 2}
+                y={ISLAND_TOP}
+                width={ISLAND_WIDTH}
+                height={ISLAND_HEIGHT}
+                color="black"
+              />
+              <Circle cx={cx} cy={cy} r={halfImageSize} color="black" />
+            </Group>
+            <Circle cx={cx} cy={cy} r={halfImageSize} opacity={opacity}>
+              <ImageShader
+                image={image}
+                fit="fill"
+                x={imageX}
+                y={imageY}
+                width={imageSize}
+                height={imageSize}
+              />
+            </Circle>
+          </Canvas>
+        </Animated.View>
+        <Animated.View style={[styles.content, contentAnimatedStyle]}>
           <Text style={styles.legend}>John Doe - Creative Developer</Text>
           <Text style={styles.textContent}>
             Lorem ipsum dolor sit amet, consectetur adipiscing elit. Etiam at
@@ -170,33 +185,9 @@ const Profile = () => {
             consectetur lorem, vitae fermentum diam turpis vitae dolor. Donec
             hendrerit metus at congue mollis. Pellentesque vehicula, sapien vel
             tincidunt mollis, lacus risus finibus libero, sed semper leo nisl
-            eget quam. Ut nec bibendum tortor, at porta justo. Sed efficitur,
-            nunc sed congue pretium, purus nibh finibus est, ut viverra magna
-            eros ac ante. Quisque lacinia blandit gravida. Fusce rhoncus ligula
-            urna, non malesuada arcu suscipit nec. Sed pretium, justo ut
-            vehicula tristique, ipsum velit posuere orci, at elementum orci
-            risus nec enim. Morbi et suscipit nisi. Vivamus rutrum nunc
-            consequat mollis gravida. Nulla lacinia nisi orci, ac volutpat metus
-            luctus vitae. Cras facilisis quis lorem vel imperdiet. Aliquam quam
-            massa, porttitor eget tortor quis, feugiat pretium odio. Suspendisse
-            elit odio, pretium in fringilla interdum, convallis ac nibh. Etiam
-            sodales urna non neque lacinia accumsan. Suspendisse sed lorem
-            consectetur, tempus turpis sit amet, faucibus odio. Aenean bibendum,
-            nibh eget sollicitudin condimentum, nisl dolor dictum risus, at
-            ultricies libero neque eu dolor. Nulla vel condimentum massa.
-            Quisque rhoncus nibh vitae turpis efficitur tristique. Mauris ut leo
-            velit. Curabitur varius, magna sit amet luctus blandit, augue ex
-            tempor lacus, quis aliquet felis lorem in risus. Duis imperdiet
-            iaculis maximus. Quisque dictum maximus malesuada. Praesent luctus
-            neque at tortor tristique bibendum. Mauris scelerisque turpis a quam
-            iaculis, non elementum eros dictum. Proin non vulputate mauris,
-            commodo molestie lectus. Donec ac posuere enim, eu vehicula felis.
-            Nulla placerat auctor venenatis. Quisque lectus ante, interdum ut
-            ante at, fringilla porta leo. Fusce dignissim lectus ut rutrum
-            euismod. Maecenas nunc nisl, condimentum a iaculis in, varius quis
-            lacus. Etiam at placerat metus, at semper tortor.
+            eget quam. Ut nec bibendum tortor, at porta justo.
           </Text>
-        </View>
+        </Animated.View>
       </Animated.ScrollView>
     </View>
   );
@@ -209,19 +200,12 @@ const styles = StyleSheet.create({
   canvas: {
     flex: 1,
     width: "100%",
-    height: "50%",
     zIndex: 2,
   },
   content: {
-    marginTop: 16,
+    marginTop: 16 - BOUNCE_SAFE_AREA,
     alignItems: "center",
     paddingHorizontal: 32,
-  },
-  avatarContainer: {
-    position: "absolute",
-    width: "100%",
-    alignItems: "center",
-    height: "100%",
   },
   legend: {
     fontSize: 14,
